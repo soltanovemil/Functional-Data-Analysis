@@ -1,0 +1,576 @@
+---
+title: "Rental Bike Sharing"
+author: "Emil Soltanov"
+date: "2024-07-07"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## Importing the Necessary Libraries
+```{r}
+library(dplyr)
+library(ggplot2)
+library(fda)
+library(TDA)
+library(depthTools)
+library(tidyverse)
+library(lubridate)
+library(splines)
+library(refund)
+library(fdapace)
+library(fda.usc)
+```
+
+## Data Loading and Preparation
+
+### Loading the Dataset
+```{r}
+# Load the bike-sharing data for both hourly and daily records
+hour_data <- read.csv("dataset/hour.csv")
+day_data <- read.csv("dataset/day.csv")
+
+# Display the first few rows of each dataset to confirm the load
+head(hour_data)
+head(day_data)
+```
+
+## Initial Data Exploration
+```{r}
+# Summary and structure of the hourly data
+summary(hour_data)
+str(hour_data)
+
+# Summary and structure of the daily data
+summary(day_data)
+str(day_data)
+
+# Checking for missing values
+sum(is.na(hour_data))
+sum(is.na(day_data))
+```
+
+## Data Preprocessing
+
+### Categorical Variable Transformation
+```{r}
+# Transform categorical variables into factors with meaningful labels
+hour_data <- hour_data %>%
+  mutate(
+    season = factor(season, levels = 1:4, labels = c("Winter", "Spring", "Summer", "Fall")),
+    yr = factor(yr, levels = 0:1, labels = c("2011", "2012")),
+    mnth = factor(mnth, levels = 1:12, labels = month.name),
+    hr = factor(hr, levels = 0:23),
+    holiday = factor(holiday, levels = 0:1, labels = c("No", "Yes")),
+    weekday = factor(weekday, levels = 0:6, labels = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")),
+    workingday = factor(workingday, levels = 0:1, labels = c("No", "Yes")),
+    weathersit = factor(weathersit, levels = 1:4, labels = c("Clear", "Mist", "Light Snow/Rain", "Heavy Rain/Snow"))
+  )
+
+day_data <- day_data %>%
+  mutate(
+    season = factor(season, levels = 1:4, labels = c("Winter", "Spring", "Summer", "Fall")),
+    yr = factor(yr, levels = 0:1, labels = c("2011", "2012")),
+    mnth = factor(mnth, levels = 1:12, labels = month.name),
+    holiday = factor(holiday, levels = 0:1, labels = c("No", "Yes")),
+    weekday = factor(weekday, levels = 0:6, labels = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")),
+    workingday = factor(workingday, levels = 0:1, labels = c("No", "Yes")),
+    weathersit = factor(weathersit, levels = 1:4, labels = c("Clear", "Mist", "Light Snow/Rain", "Heavy Rain/Snow"))
+  )
+
+
+# Check if transformations are applied correctly
+str(hour_data)
+str(day_data)
+```
+
+### Feature Scaling for Numeric Variables
+```{r}
+# Scaling numeric features such as temperature, humidity, and windspeed
+hour_data <- hour_data %>%
+  mutate(temp_scaled = scale(temp),
+         atemp_scaled = scale(atemp),
+         hum_scaled = scale(hum),
+         windspeed_scaled = scale(windspeed))
+
+day_data <- day_data %>%
+  mutate(temp_scaled = scale(temp),
+         atemp_scaled = scale(atemp),
+         hum_scaled = scale(hum),
+         windspeed_scaled = scale(windspeed))
+
+
+# Checking if scaling worked 
+summary(hour_data$temp_scaled)
+summary(day_data$temp_scaled)
+```
+
+### Handling Date Variables
+```{r}
+# Convert date fields to Date format for easier manipulation
+hour_data$dteday <- as.Date(hour_data$dteday)
+day_data$dteday <- as.Date(day_data$dteday)
+
+# Check for consistency
+range(hour_data$dteday)
+range(day_data$dteday)
+
+# Optional: Extract additional time-related features if needed
+day_data <- day_data %>%
+  mutate(day_of_year = as.numeric(format(dteday, "%j")),
+         week_of_year = as.numeric(format(dteday, "%U")))
+
+# Display the first few rows of the preprocessed hourly and daily data
+head(hour_data)
+head(day_data)
+```
+
+## Functional Data Analysis (FDA)
+
+### Smoothing Functional Data
+```{r}
+# Create a functional data object for hourly data
+time_points <- seq(0, 23, length.out = 24)  # 24 hours in a day
+
+# Convert the bike rental data into a matrix form suitable for FDA
+num_days <- floor(nrow(hour_data) / 24)
+bike_matrix <- matrix(hour_data$cnt[1:(24 * num_days)], nrow = 24, byrow = TRUE)
+
+# Create a basis object using B-splines
+bike_basis <- create.bspline.basis(rangeval = c(0, 23), nbasis = 10)
+
+# Smoothing with an optional penalty (lambda)
+fdParobj <- fdPar(bike_basis, Lfdobj = 2, lambda = 1e-2)  # Lfdobj = 2 for second derivative penalty
+bike_fd <- smooth.basis(time_points, bike_matrix, fdParobj)$fd
+
+# Plot the functional data
+plot(bike_fd, main = "Functional Data Analysis of Hourly Bike Rentals")
+```
+
+### Functional Object Creation based on Temperature
+```{r}
+# Determine the number of complete days available in the dataset for consistent dimensions
+num_days_temp <- floor(nrow(hour_data) / 24)
+
+# Create the temperature matrix with one day's data per row (24 hours per day)
+temp_matrix <- matrix(hour_data$temp_scaled[1:(24 * num_days_temp)], nrow = 24, byrow = TRUE)
+
+# Define the time points corresponding to the hours in a day
+time_points <- seq(0, 23, length.out = 24)  # 24 hours in a day
+
+# Create a basis object using B-splines, similar to what is used for the bike rental data
+temp_basis <- create.bspline.basis(rangeval = c(0, 23), nbasis = 10)
+
+# Create a functional parameter object with an optional smoothing penalty
+fdParobj_temp <- fdPar(temp_basis, Lfdobj = 2, lambda = 1e-2)  # Second derivative penalty
+
+# Smooth the temperature data to create the functional data object
+temp_fd <- smooth.basis(time_points, temp_matrix, fdParobj_temp)$fd
+
+# Plot the smoothed temperature functional data to verify
+plot(temp_fd, main = "Functional Data Analysis of Hourly Temperature")
+```
+
+### Basis Functions Representation
+```{r}
+# Fourier basis representation example
+fourier_basis <- create.fourier.basis(rangeval = c(0, 23), nbasis = 7)
+
+# Represent the hourly data using Fourier basis
+fourier_data <- smooth.basis(argvals = time_points, y = bike_matrix, fdParobj = fourier_basis)
+
+# Plot the Fourier representation
+plot(fourier_data$fd, main = "Fourier Basis Representation of Bike Rentals", xlab = "Hour", ylab = "Rental Counts")
+```
+
+### Functional Principal Component Analysis (FPCA)
+```{r}
+# Perform Functional PCA on the smoothed data
+pca_fd <- pca.fd(bike_fd, nharm = 4)
+
+# Plot the first few principal components
+plot(pca_fd$harmonics, main = "Functional Principal Components", xlab = "Hour", ylab = "Principal Component Scores")
+
+# Scree plot to visualize the variance explained
+plot(pca_fd$values, type = "b", main = "Scree Plot", xlab = "Principal Components", ylab = "Eigenvalues")
+
+# Plot proportion of variance explained by each principal component
+plot(cumsum(pca_fd$varprop) * 100, type = "b", 
+     main = "Cumulative Variance Explained", 
+     xlab = "Principal Component", ylab = "Cumulative Variance (%)")
+
+plot(pca_fd$harmonics[1], main = "First Principal Component (PC1)", xlab = "Hour", ylab = "Amplitude")
+
+
+
+```
+### Data Registration
+```{r}
+# Step 1: Define the mean curve (target for registration)
+mean_rentals_fd <- mean.fd(bike_fd)
+
+# Step 2: Use the same basis as bike_fd for the warping function
+# Ensure that the warping basis has the same number of basis functions as bike_fd
+warp_basis <- create.bspline.basis(rangeval = c(0, 23), nbasis = 10)  # Same as bike_fd's basis
+
+# Step 3: Define the warping function parameter object
+Wfd <- fd(matrix(0, 10, num_days), warp_basis)  # Create a functional data object with 10 basis functions
+WfdPar <- fdPar(Wfd, Lfdobj = 2, lambda = 1e-1)  # Use the same Lfdobj for smoothness
+
+# Step 4: Perform continuous registration using the correct dimensions
+registration_result <- register.fd(yfd = bike_fd, WfdParobj = WfdPar, y0fd = mean_rentals_fd)
+
+# Step 5: Extract and plot the registered functional data
+registered_fd <- registration_result$regfd
+
+# Plot the registered data (aligned curves)
+plot(registered_fd, main = "Registered Functional Data (Bike Rentals)")
+
+# Plot original curves
+plot(bike_fd, main = "Original Bike Rental Curves")
+
+
+```
+
+### Functional Regression
+```{r}
+library(refund)
+reg_fd <- fRegress(bike_fd ~ temp_fd)  # Modify accordingly based on actual response and predictors used
+
+# Check the structure of the result to understand how to access the coefficients
+print(summary(reg_fd))
+
+
+
+
+# Plotting the estimated coefficient for temperature
+if (length(reg_fd$betaestlist) > 0) {
+    temp_beta_fd <- reg_fd$betaestlist[[1]]$fd
+    plot(temp_beta_fd, main="Estimated Regression Coefficients for Temperature",
+         xlab="Hour of the Day", ylab="Effect on Bike Rentals")
+} else {
+    cat("No coefficients available for plotting.\n")
+}
+
+
+
+
+# Define constants and coefficients using the structure from the lab
+xfdlist <- list(const = rep(1, num_days), temp_fd = temp_fd)
+
+# Define the intercept as a constant
+betabasis_const <- create.constant.basis(c(0, 23))
+betafd_const <- fd(0, betabasis_const)
+betafdPar_const <- fdPar(betafd_const)
+
+# Define the coefficient for temperature using a Fourier basis
+betabasis_temp <- create.fourier.basis(c(0, 23), 5)
+betafdPar_temp <- fdPar(betabasis_temp)
+
+# Create the list of coefficients
+betalist <- list(const = betafdPar_const, temp_fd = betafdPar_temp)
+
+# Run the functional regression with detailed setup
+reg_fd_detailed <- fRegress(bike_fd, xfdlist, betalist)
+
+# Plot the estimated coefficients
+plot(reg_fd_detailed$betaestlist[[2]], main="Detailed Regression Coefficients for Temperature",
+     xlab="Hour of the Day", ylab="Effect on Bike Rentals")
+
+# Ensure correct evaluation of fitted values
+fitted_values <- eval.fd(time_points, reg_fd_detailed$yhatfdobj)
+
+# Convert 'bike_fd' to a simple vector if necessary, or align formats
+observed_values <- eval.fd(time_points, bike_fd)
+
+# Now calculate residuals
+residuals <- observed_values - fitted_values
+
+# Sum of Squared Errors
+SSE <- sum(residuals^2)
+
+# Total Sum of Squares
+SST <- sum((observed_values - mean(observed_values))^2)
+
+# R-squared Value
+R_squared <- 1 - SSE / SST
+cat("R-squared: ", R_squared, "\n")
+
+# Computing F-statistic (if necessary, adjust degrees of freedom)
+num_params <- 5  # Change according to the number of parameters in your model
+num_obs <- length(observed_values)
+F_ratio <- ((SST - SSE) / num_params) / (SSE / (num_obs - num_params - 1))
+cat("F-ratio: ", F_ratio, "\n")
+```
+
+### Functional Regression Analysis with Humidity and Windspeed
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(fda)
+
+# Load the bike-sharing data
+hour_data <- read.csv("dataset/hour.csv")
+
+# Scale numeric features for temperature, humidity, and windspeed
+hour_data <- hour_data %>%
+  mutate(temp_scaled = scale(temp),
+         hum_scaled = scale(hum),
+         windspeed_scaled = scale(windspeed))
+
+# Define time points and calculate the number of complete days
+time_points <- seq(0, 23, length.out = 24)
+num_days <- floor(nrow(hour_data) / 24)  # Calculate 655 complete 24-hour sets
+
+# Create data matrices for temperature, humidity, and windspeed using only the first `num_days` days
+temp_matrix <- matrix(hour_data$temp_scaled[1:(24 * num_days)], nrow = 24, byrow = TRUE)
+hum_matrix <- matrix(hour_data$hum_scaled[1:(24 * num_days)], nrow = 24, byrow = TRUE)
+windspeed_matrix <- matrix(hour_data$windspeed_scaled[1:(24 * num_days)], nrow = 24, byrow = TRUE)
+
+# Recreate bike_fd for the same number of days (655) to ensure consistency
+bike_matrix <- matrix(hour_data$cnt[1:(24 * num_days)], nrow = 24, byrow = TRUE)
+bike_basis <- create.bspline.basis(rangeval = c(0, 23), nbasis = 10)  # Match basis functions for consistency
+fdPar_bike <- fdPar(bike_basis, Lfdobj = 2, lambda = 1e-2)
+bike_fd <- smooth.basis(time_points, bike_matrix, fdPar_bike)$fd
+
+# Create basis objects and smoothing parameters for each predictor
+temp_basis <- create.bspline.basis(rangeval = c(0, 23), nbasis = 10)
+hum_basis <- create.bspline.basis(rangeval = c(0, 23), nbasis = 10)
+windspeed_basis <- create.bspline.basis(rangeval = c(0, 23), nbasis = 10)
+
+fdPar_temp <- fdPar(temp_basis, Lfdobj = 2, lambda = 1e-2)
+fdPar_hum <- fdPar(hum_basis, Lfdobj = 2, lambda = 1e-2)
+fdPar_windspeed <- fdPar(windspeed_basis, Lfdobj = 2, lambda = 1e-2)
+
+# Smooth the temperature, humidity, and windspeed data to create functional data objects
+temp_fd <- smooth.basis(time_points, temp_matrix, fdPar_temp)$fd
+hum_fd <- smooth.basis(time_points, hum_matrix, fdPar_hum)$fd
+windspeed_fd <- smooth.basis(time_points, windspeed_matrix, fdPar_windspeed)$fd
+
+# Verify that all functional data objects have the same dimensions (10 basis functions, 655 days)
+print(dim(temp_fd$coefs))       # Should be (10, 655)
+print(dim(hum_fd$coefs))        # Should be (10, 655)
+print(dim(windspeed_fd$coefs))  # Should be (10, 655)
+print(dim(bike_fd$coefs))       # Should be (10, 655)
+
+# If everything matches, proceed with functional regression
+if (!all(dim(temp_fd$coefs)[2] == dim(hum_fd$coefs)[2] &&
+         dim(hum_fd$coefs)[2] == dim(windspeed_fd$coefs)[2] &&
+         dim(windspeed_fd$coefs)[2] == dim(bike_fd$coefs)[2])) {
+   stop("Mismatch in number of days across functional data objects")
+}
+
+# Define predictor list for regression including temp_fd, hum_fd, and windspeed_fd
+xfdlist <- list(
+  const = rep(1, num_days),   # Constant term
+  temp_fd = temp_fd,          # Temperature
+  hum_fd = hum_fd,            # Humidity
+  windspeed_fd = windspeed_fd # Windspeed
+)
+
+# Define basis functions for the coefficients
+betabasis_temp <- create.fourier.basis(c(0, 23), 5)
+betabasis_hum <- create.fourier.basis(c(0, 23), 5)
+betabasis_windspeed <- create.fourier.basis(c(0, 23), 5)
+
+# Define the list of coefficients for the functional regression
+betalist <- list(
+  const = fdPar(create.constant.basis(c(0, 23))), 
+  temp_fd = fdPar(betabasis_temp),
+  hum_fd = fdPar(betabasis_hum),
+  windspeed_fd = fdPar(betabasis_windspeed)
+)
+
+# Run the extended functional regression
+reg_fd_multi <- fRegress(bike_fd, xfdlist, betalist)
+
+# Plot estimated coefficients for temperature, humidity, and windspeed
+par(mfrow = c(1, 3))
+plot(reg_fd_multi$betaestlist[[2]], main = "Effect of Temperature", xlab = "Hour", ylab = "Effect on Rentals")
+plot(reg_fd_multi$betaestlist[[3]], main = "Effect of Humidity", xlab = "Hour", ylab = "Effect on Rentals")
+plot(reg_fd_multi$betaestlist[[4]], main = "Effect of Windspeed", xlab = "Hour", ylab = "Effect on Rentals")
+
+```
+
+### FANOVA
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(fda)
+
+# Load the bike-sharing data
+hour_data <- read.csv("dataset/hour.csv")
+day_data <- read.csv("dataset/day.csv")
+
+# Ensure date fields are in character format for filtering
+hour_data$dteday <- as.character(hour_data$dteday)
+day_data$dteday <- as.character(day_data$dteday)
+
+# Identify and filter for complete days
+complete_days <- names(table(hour_data$dteday)[table(hour_data$dteday) == 24])
+print(complete_days)  # Should print all complete days
+
+hour_data_filtered <- hour_data %>% filter(dteday %in% complete_days)
+print(nrow(hour_data_filtered))  # Ensure rows are retained
+
+# Ensure consistency with day_data
+common_days <- intersect(unique(hour_data_filtered$dteday), day_data$dteday)
+print(common_days)  # Verify common days
+
+day_data_filtered <- day_data %>% filter(dteday %in% common_days)
+print(nrow(day_data_filtered))  # Check if filtering retains rows
+print(head(day_data_filtered))  # Verify filtered data
+print(levels(day_data_filtered$season))  # Verify factor levels
+
+# Reassign 'season' factor levels correctly after filtering
+day_data_filtered$season <- factor(day_data_filtered$season, levels = c(1, 2, 3, 4))
+levels(day_data_filtered$season) <- c("Winter", "Spring", "Summer", "Fall")
+print(table(day_data_filtered$season))  # Confirm all seasons are represented
+
+# Create the Fourier basis
+time_points <- seq(0, 23, length.out = 24)
+bike_matrix <- matrix(hour_data_filtered$cnt, nrow = 24, byrow = TRUE)
+bike_basis <- create.fourier.basis(rangeval = c(0, 23), nbasis = 15)
+
+# Create the functional data object
+fdParobj <- fdPar(bike_basis, Lfdobj = 2, lambda = 1e-2)
+bike_fd <- smooth.basis(time_points, bike_matrix, fdParobj)$fd
+
+# Plot to visualize
+plot(bike_fd, main = "Functional Data: Smoothed Bike Rentals (Hourly)")
+
+# Rebuild the design matrix for seasons
+zmat <- model.matrix(~ 0 + season, data = day_data_filtered)
+cat("Dimensions of zmat:", dim(zmat), "\n")  # Should be number of days x 4 (one for each season)
+
+# Rebuild xfdlist for each season
+xfdlist <- lapply(1:ncol(zmat), function(i) zmat[, i])
+cat("Length of xfdlist:", length(xfdlist), "\n")  # Should be 4
+
+# Set up the harmonic acceleration operator
+harmaccelLfd <- vec2Lfd(c((2 * pi / 24)^2, 0, 1), c(0, 23))
+
+# Set up the functional parameter objects for regression
+betafdPar <- lapply(1:length(xfdlist), function(x) fdPar(bike_basis, harmaccelLfd, lambda = 10^(-2)))
+
+# Run the functional regression (FANOVA)
+fRegressList <- fRegress(bike_fd, xfdlist, betafdPar)
+print(summary(fRegressList))
+
+# Plot the functional coefficients for each season
+betaestlist <- fRegressList$betaestlist
+par(mfrow = c(2, 2))
+for (j in 1:length(betaestlist)) {
+  plot(betaestlist[[j]]$fd, main = paste("Effect of", colnames(zmat)[j]), 
+       xlab = "Hour of the Day", ylab = "Change in Bike Rentals")
+}
+```
+### Depth Measures 
+```{r}
+# Correct time grid for 24 hours
+time_grid <- seq(0, 23, length.out = 100)  # Evaluate on 100 points across 24 hours
+
+# Evaluate the functional data
+evaluated_fd <- eval.fd(time_grid, bike_fd)
+
+# Compute depth using MBD (Modified Band Depth)
+depth_mbd <- depth.FM(bike_fd)
+
+# Create the functional boxplot using MBD, excluding outliers
+boxplot_mbd <- fbplot(evaluated_fd, depth = depth_mbd$dep, method = "MBD", 
+                      xlab = "Time (Hours)", main = "Functional Boxplot of Bike Rentals (MBD)")
+```
+### Outlier Detection Using Depth Measures
+```{r}
+# Correct time grid for 24 hours (matching the original data points)
+time_grid <- seq(0, 23, length.out = 24)  # Use 24 time points across 24 hours
+
+# Evaluate the functional data on the original time grid
+evaluated_fd <- eval.fd(time_grid, bike_fd)
+
+# Compute depth using MBD (Modified Band Depth)
+depth_mbd <- depth.FM(bike_fd)
+
+# Adjust the outlier threshold to show fewer outliers (e.g., 5% threshold)
+outlier_threshold <- quantile(depth_mbd$dep, probs = 0.05)  # More extreme outliers
+outliers <- which(depth_mbd$dep < quantile(depth_mbd$dep, probs = 0.05))  # 5% lowest depth values
+
+# Plot the boxplot without plotting outliers
+boxplot_mbd <- fbplot(evaluated_fd, depth = depth_mbd$dep, method = "MBD", 
+                      xlab = "Time (Hours)", main = "Functional Boxplot of Bike Rentals (MBD)",
+                      prob = 0.5,  # Central region containing 50% of curves
+                      color = "purple")
+
+# Highlight the median curve
+median_index <- which.max(depth_mbd$dep)
+median_curve <- evaluated_fd[, median_index]
+lines(time_grid, median_curve, col = "blue", lwd = 2)
+
+# If you still want to plot fewer outliers (optional)
+if (length(outliers) > 0) {
+  # Highlight outlier curves with transparency
+  for (i in outliers) {
+    lines(evaluated_fd[, i], col = adjustcolor("red", alpha.f = 0.5), lty = 2, lwd = 2)  # Transparent red lines
+}
+
+}
+
+# Add a legend to the plot
+legend("topright", legend = c("Median", "Outliers"), col = c("blue", "red"), lty = c(1, 2), lwd = 2)
+```
+### Wilcoxon Test for Depth Measures
+```{r}
+# Filter the `hour_data` to match the data used for the `bike_fd`
+num_days <- length(depth_mbd$dep)
+filtered_hour_data <- hour_data[1:(num_days * 24), ]
+
+# Separate depth measures into weekdays and weekends
+weekdays_depth <- depth_mbd$dep[filtered_hour_data$weekday %in% 1:5]  # Monday to Friday
+weekends_depth <- depth_mbd$dep[filtered_hour_data$weekday %in% c(0, 6)]  # Sunday and Saturday
+
+# Perform the Wilcoxon test
+wilcox_test_result <- wilcox.test(weekdays_depth, weekends_depth, alternative = "two.sided")
+
+# Print the result
+print(wilcox_test_result)
+```
+### Comparison of Depth Measures (Weekdays vs. Weekends)
+```{r}
+# Create a data frame for the depth values and corresponding groups (Weekday or Weekend)
+depth_data <- data.frame(
+  Depth = depth_mbd$dep,
+  Group = ifelse(filtered_hour_data$weekday %in% 1:5, "Weekday", "Weekend")
+)
+
+# Create the boxplot for visual comparison of depth measures
+ggplot(depth_data, aes(x = Group, y = Depth)) +
+  geom_boxplot(fill = c("lightblue", "lightgreen")) +
+  labs(title = "Comparison of Depth Measures (Weekdays vs. Weekends)", 
+       x = "Group", y = "Depth") +
+  theme_minimal()
+```
+### Additional Functional Analysis for Casual and Registered Users
+```{r}
+# Create matrices for casual and registered rentals
+casual_matrix <- matrix(hour_data$casual[1:(24 * num_days)], nrow = 24, byrow = TRUE)
+registered_matrix <- matrix(hour_data$registered[1:(24 * num_days)], nrow = 24, byrow = TRUE)
+
+# Smooth the functional data for casual and registered users
+casual_fd <- smooth.basis(time_points, casual_matrix, fdPar(bike_basis, Lfdobj = 2, lambda = 1e-2))$fd
+registered_fd <- smooth.basis(time_points, registered_matrix, fdPar(bike_basis, Lfdobj = 2, lambda = 1e-2))$fd
+
+# Plot the smoothed functional data for casual and registered users
+par(mfrow = c(1, 2))
+plot(casual_fd, main = "Functional Data for Casual Users", xlab = "Hour", ylab = "Rental Counts")
+plot(registered_fd, main = "Functional Data for Registered Users", xlab = "Hour", ylab = "Rental Counts")
+
+# Optional: Run FPCA to compare principal components for casual and registered users
+pca_fd_casual <- pca.fd(casual_fd, nharm = 4)
+pca_fd_registered <- pca.fd(registered_fd, nharm = 4)
+
+# Plot the first principal component for each user group
+par(mfrow = c(1, 2))
+plot(pca_fd_casual$harmonics[1], main = "First PC for Casual Users", xlab = "Hour", ylab = "Amplitude")
+plot(pca_fd_registered$harmonics[1], main = "First PC for Registered Users", xlab = "Hour", ylab = "Amplitude")
+```
+
